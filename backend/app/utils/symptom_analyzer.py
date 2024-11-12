@@ -1,229 +1,285 @@
 # backend/app/utils/symptom_analyzer.py
 from typing import Dict, List
-import re
-from collections import defaultdict
+import logging
+from app.utils.ai_config import GeminiConfig
+import json
+
+logger = logging.getLogger(__name__)
 
 class SymptomAnalyzer:
     def __init__(self):
-        self.symptom_patterns = {
-            'consistency': 0.4,
-            'detail_level': 0.3,
-            'intensity': 0.3
-        }
+        self.ai_config = GeminiConfig()
+
+    async def analyze_conversation(self, chat_history: List[Dict]) -> Dict:
+        """Analyze entire conversation for symptoms using AI."""
+        try:
+            # Create analysis prompt
+            analysis_prompt = f"""
+            Analyze this medical consultation conversation and extract detailed symptom information.
+            
+            Conversation:
+            {self._format_chat_history(chat_history)}
+
+            Provide a structured analysis including:
+            1. Identified symptoms with:
+               - Severity (1-10)
+               - Duration
+               - Pattern (constant, intermittent, progressive)
+               - Related factors
+               - Impact on daily activities
+            2. Symptom progression over time
+            3. Risk assessment
+            4. Urgency level
+            
+            Format response as JSON with these exact keys:
+            {{
+                "symptoms": [
+                    {{
+                        "name": "symptom name",
+                        "severity": 1-10,
+                        "duration": "duration description",
+                        "pattern": "pattern description",
+                        "related_factors": ["factor1", "factor2"],
+                        "impact": "impact description"
+                    }}
+                ],
+                "progression": "progression description",
+                "risk_level": "low|medium|high",
+                "urgency": "routine|prompt|immediate",
+                "confidence_score": 1-100
+            }}
+            """
+
+            # Get AI analysis
+            response = self.ai_config.model.generate_content(analysis_prompt)
+            analysis = self._parse_ai_response(response.text)
+            
+            return analysis
+
+        except Exception as e:
+            logger.error(f"Error analyzing conversation: {str(e)}")
+            raise
+
+    async def validate_medical_response(self, response: str, context: List[Dict]) -> Dict:
+        """Validate medical response using AI."""
+        try:
+            validation_prompt = f"""
+            Validate this medical response for quality and safety:
+
+            Response to validate:
+            {response}
+
+            Context:
+            {self._format_chat_history(context)}
+
+            Check for:
+            1. Medical accuracy
+            2. Appropriate caution/disclaimers
+            3. Emergency recognition
+            4. Completeness of response
+            5. Professional tone
+            
+            Format response as JSON with these exact keys:
+            {{
+                "is_valid": true|false,
+                "safety_concerns": ["concern1", "concern2"],
+                "missing_elements": ["element1", "element2"],
+                "emergency_level": "none|low|high",
+                "improvement_needed": true|false,
+                "suggested_improvements": ["improvement1", "improvement2"]
+            }}
+            """
+
+            validation_response = self.ai_config.model.generate_content(validation_prompt)
+            return self._parse_ai_response(validation_response.text)
+
+        except Exception as e:
+            logger.error(f"Error validating response: {str(e)}")
+            raise
+
+    def _format_chat_history(self, chat_history: List[Dict]) -> str:
+        """Format chat history for AI prompt."""
+        formatted = []
+        for msg in chat_history:
+            role = "Patient" if msg["type"] == "user" else "Doctor"
+            formatted.append(f"{role}: {msg['content']}")
+        return "\n".join(formatted)
+
+    def _parse_ai_response(self, response: str) -> Dict:
+        """Parse AI response ensuring it's valid JSON."""
+        try:
+            # Clean and format the response text
+            cleaned_response = response.strip()
+            # Look for JSON content between curly braces if present
+            start_idx = cleaned_response.find('{')
+            end_idx = cleaned_response.rfind('}')
+            
+            if start_idx >= 0 and end_idx > start_idx:
+                json_str = cleaned_response[start_idx:end_idx + 1]
+                return json.loads(json_str)
+            
+            # If no JSON found, create a structured response
+            return {
+                "symptoms": [],
+                "progression": "Unable to determine",
+                "risk_level": "unknown",
+                "urgency": "unknown",
+                "confidence_score": 0
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parsing failed, creating structured response: {str(e)}")
+            return {
+                "symptoms": [],
+                "progression": "Unable to determine",
+                "risk_level": "unknown",
+                "urgency": "unknown",
+                "confidence_score": 0
+            }
+
+
+    async def get_severity_assessment(self, symptoms: List[Dict]) -> Dict:
+        """Get AI-powered severity assessment."""
+        severity_prompt = f"""
+        Assess the severity of these symptoms:
+        {json.dumps(symptoms, indent=2)}
+
+        Consider:
+        1. Individual symptom severity
+        2. Symptom combinations
+        3. Impact on daily life
+        4. Risk factors
+        5. Emergency indicators
+
+        Provide assessment as JSON with:
+        {{
+            "overall_severity": 1-10,
+            "risk_level": "low|medium|high",
+            "requires_emergency": true|false,
+            "recommended_timeframe": "when to seek care",
+            "reasoning": ["reason1", "reason2"]
+        }}
+        """
+
+        response = self.ai_config.model.generate_content(severity_prompt)
+        return self._parse_ai_response(response.text)
+    
+    # def analyze_symptoms(self, chat_history: List[Dict]) -> List[Dict]:
+    #     """Analyze symptoms from chat history."""
+    #     try:
+    #         symptoms = []
+    #         for message in chat_history:
+    #             if message.get('symptom_analysis'):
+    #                 symptoms.extend(message['symptom_analysis'].get('symptoms', []))
+            
+    #         # Consolidate duplicate symptoms and average their intensities
+    #         consolidated_symptoms = {}
+    #         for symptom in symptoms:
+    #             name = symptom['name'].lower()
+    #             if name in consolidated_symptoms:
+    #                 consolidated_symptoms[name]['intensity'] = (
+    #                     consolidated_symptoms[name]['intensity'] + float(symptom['severity'])
+    #                 ) / 2
+    #             else:
+    #                 consolidated_symptoms[name] = {
+    #                     'name': symptom['name'],
+    #                     'intensity': float(symptom['severity']),
+    #                     'duration': symptom.get('duration', 'Not specified'),
+    #                     'pattern': symptom.get('pattern', 'Not specified')
+    #                 }
+            
+    #         return list(consolidated_symptoms.values())
+    #     except Exception as e:
+    #         logger.error(f"Error analyzing symptoms: {str(e)}")
+    #         return []
+        
+    # def calculate_severity_score(self, symptoms: List[Dict]) -> float:
+    #     """Calculate overall severity score from symptoms."""
+    #     try:
+    #         if not symptoms:
+    #             return 0.0
+                
+    #         total_severity = 0.0
+    #         for symptom in symptoms:
+    #             severity = symptom.get('severity') or symptom.get('intensity', 0)
+    #             if severity:
+    #                 total_severity += float(severity)
+            
+    #         # Normalize to 1-10 scale
+    #         return min(10.0, (total_severity / len(symptoms)))
+            
+    #     except Exception as e:
+    #         logger.error(f"Error calculating severity score: {str(e)}")
+    #         return 0.0
 
     def analyze_symptoms(self, chat_history: List[Dict]) -> List[Dict]:
-        symptoms = defaultdict(lambda: {
-            'mentions': 0,
-            'details': [],
-            'intensity_scores': [],
-            'confidence_score': 0
-        })
-        
-        for message in chat_history:
-            if message.get('type') == 'user':
-                self._process_message(message.get('content', ''), symptoms)
-        
-        return self._calculate_confidence_scores(symptoms)
-
-    def generate_diagnosis_description(self, analyzed_symptoms: List[Dict]) -> str:
-        if not analyzed_symptoms:
-            return "No symptoms were identified during the consultation."
-        
-        description = "Based on your reported symptoms:\n\n"
-        
-        for symptom in analyzed_symptoms:
-            confidence = symptom.get('confidence_score', 0)
-            intensity = symptom.get('intensity', 0)
+        try:
+            symptoms = []
+            for message in chat_history:
+                if message.get('symptom_analysis'):
+                    for symptom in message['symptom_analysis'].get('symptoms', []):
+                        if isinstance(symptom, dict):
+                            symptoms.append({
+                                'name': symptom.get('name', 'Unknown'),
+                                'severity': float(symptom.get('severity', 0) or 0),
+                                'duration': symptom.get('duration', 'Not specified'),
+                                'pattern': symptom.get('pattern', 'Not specified')
+                            })
             
-            severity = "mild" if intensity <= 3 else "moderate" if intensity <= 7 else "severe"
-            confidence_level = "low" if confidence < 50 else "moderate" if confidence < 80 else "high"
-            
-            description += f"- {symptom['name']}: {severity} intensity ({intensity}/10)"
-            description += f" with {confidence_level} confidence ({confidence}%)\n"
-        
-        return description
+            return symptoms
+        except Exception as e:
+            logger.error(f"Error analyzing symptoms: {str(e)}")
+            return []
 
-    def calculate_severity_score(self, analyzed_symptoms: List[Dict]) -> int:
-        if not analyzed_symptoms:
-            return 0
+    def calculate_severity_score(self, symptoms: List[Dict]) -> float:
+        try:
+            if not symptoms:
+                return 0.0
+                
+            severities = []
+            for symptom in symptoms:
+                severity = symptom.get('severity', 0)
+                if severity is not None:
+                    severities.append(float(severity))
             
-        total_score = sum(
-            symptom.get('intensity', 0) * (symptom.get('confidence_score', 0) / 100)
-            for symptom in analyzed_symptoms
-        )
-        
-        return round(min(10, max(1, total_score / len(analyzed_symptoms))))
+            return sum(severities) / len(severities) if severities else 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating severity score: {str(e)}")
+            return 0.0
 
-    def determine_risk_level(self, analyzed_symptoms: List[Dict]) -> str:
-        severity_score = self.calculate_severity_score(analyzed_symptoms)
+    def determine_risk_level(self, symptoms: List[Dict]) -> str:
+        """Determine risk level based on symptoms."""
+        severity_score = self.calculate_severity_score(symptoms)
         
-        if severity_score <= 3:
-            return "Low Risk"
-        elif severity_score <= 7:
-            return "Medium Risk"
+        if severity_score >= 8.0:
+            return "high"
+        elif severity_score >= 5.0:
+            return "medium"
         else:
-            return "High Risk"
+            return "low"
 
-    def recommend_timeframe(self, analyzed_symptoms: List[Dict]) -> str:
-        severity_score = self.calculate_severity_score(analyzed_symptoms)
+    def recommend_timeframe(self, symptoms: List[Dict]) -> str:
+        """Recommend consultation timeframe based on symptoms."""
+        risk_level = self.determine_risk_level(symptoms)
         
-        if severity_score <= 3:
-            return "Within 2 weeks"
-        elif severity_score <= 5:
-            return "Within 1 week"
-        elif severity_score <= 7:
-            return "Within 48 hours"
-        elif severity_score <= 9:
-            return "Within 24 hours"
+        if risk_level == "high":
+            return "immediate"
+        elif risk_level == "medium":
+            return "within 24 hours"
         else:
-            return "Immediate medical attention recommended"
+            return "within a week"
 
-    def recommend_specialist(self, analyzed_symptoms: List[Dict]) -> str:
-        if not analyzed_symptoms:
-            return "General Practitioner"
-            
-        specialist_mapping = {
-            'head': 'Neurologist',
-            'headache': 'Neurologist',
-            'migraine': 'Neurologist',
-            'chest': 'Cardiologist',
-            'heart': 'Cardiologist',
-            'breath': 'Pulmonologist',
-            'stomach': 'Gastroenterologist',
-            'skin': 'Dermatologist',
-            'joint': 'Orthopedist',
-            'anxiety': 'Psychiatrist',
-            'depression': 'Psychiatrist'
-        }
-        
-        specialist_counts = defaultdict(int)
-        for symptom in analyzed_symptoms:
-            for key, specialist in specialist_mapping.items():
-                if key in symptom['name'].lower():
-                    specialist_counts[specialist] += 1
-        
-        if not specialist_counts:
-            return "General Practitioner"
-        
-        return max(specialist_counts.items(), key=lambda x: x[1])[0]
+    def recommend_specialist(self, symptoms: List[Dict]) -> str:
+        """Recommend appropriate medical specialist based on symptoms."""
+        # Default to general practitioner
+        return "General Practitioner"
+    
+    def needs_conclusion(self, symptoms: List[Dict]) -> bool:
+        """Determine if enough symptom data is gathered for conclusion"""
+        if len(symptoms) >= 3:  # At least 3 symptoms documented
+            severity_score = self.calculate_severity_score(symptoms)
+            return severity_score > 0  # We have meaningful severity data
+        return False
 
-    def generate_medication_recommendations(self, analyzed_symptoms: List[Dict]) -> List[str]:
-        if not analyzed_symptoms:
-            return ["Please consult a healthcare provider for appropriate medication recommendations."]
-            
-        recommendations = set()
-        for symptom in analyzed_symptoms:
-            symptom_name = symptom['name'].lower()
-            intensity = symptom.get('intensity', 5)
-            
-            if 'headache' in symptom_name or 'pain' in symptom_name:
-                recommendations.add("Over-the-counter pain relievers like acetaminophen or ibuprofen")
-            if 'fever' in symptom_name:
-                recommendations.add("Fever reducers (acetaminophen)")
-            if 'nausea' in symptom_name:
-                recommendations.add("Anti-nausea medication")
-            
-        if not recommendations:
-            recommendations.add("Consult with a healthcare provider for specific medication recommendations")
-            
-        return list(recommendations)
 
-    def generate_home_remedies(self, analyzed_symptoms: List[Dict]) -> List[str]:
-        if not analyzed_symptoms:
-            return ["Rest and monitor your condition"]
-            
-        remedies = set()
-        for symptom in analyzed_symptoms:
-            symptom_name = symptom['name'].lower()
-            
-            if 'headache' in symptom_name:
-                remedies.add("Rest in a quiet, dark room")
-                remedies.add("Apply a cold or warm compress")
-            if 'nausea' in symptom_name:
-                remedies.add("Stay hydrated with clear fluids")
-                remedies.add("Try ginger tea or peppermint")
-            
-        remedies.add("Get adequate rest")
-        remedies.add("Stay hydrated")
-        
-        return list(remedies)
-
-    def generate_precautions(self, analyzed_symptoms: List[Dict]) -> List[str]:
-        precautions = [
-            "Monitor your symptoms and seek immediate medical attention if they worsen",
-            "Keep track of any changes in your symptoms",
-            "Stay well-hydrated and get adequate rest"
-        ]
-        
-        severity_score = self.calculate_severity_score(analyzed_symptoms)
-        if severity_score > 7:
-            precautions.extend([
-                "Avoid strenuous activities",
-                "Have someone stay with you or check on you regularly",
-                "Keep emergency contact numbers handy"
-            ])
-            
-        return precautions
-
-    # Keep existing _process_message and _calculate_confidence_scores methods
-
-    def _process_message(self, message: str, symptoms: Dict) -> None:
-        """Process individual messages for symptom information."""
-        # Extract symptom mentions with details
-        pattern = r'(mild|moderate|severe)?\s*(\w+(?:\s+\w+)?)\s*(pain|ache|discomfort|feeling)?\s*(?:intensity|level)?\s*(\d+)?'
-        matches = re.finditer(pattern, message.lower())
-
-        for match in matches:
-            severity, symptom_name, type_desc, intensity = match.groups()
-            
-            if symptom_name in ['the', 'and', 'or', 'my', 'a']:
-                continue
-
-            symptom_data = symptoms[symptom_name]
-            symptom_data['mentions'] += 1
-            
-            # Record detail level
-            details = []
-            if severity:
-                details.append('severity_mentioned')
-            if type_desc:
-                details.append('type_described')
-            if intensity:
-                details.append('intensity_specified')
-                symptom_data['intensity_scores'].append(int(intensity))
-            
-            symptom_data['details'].extend(details)
-
-    def _calculate_confidence_scores(self, symptoms: Dict) -> List[Dict]:
-        """Calculate final confidence scores for symptoms."""
-        analyzed_symptoms = []
-
-        for symptom_name, data in symptoms.items():
-            # Calculate component scores
-            consistency_score = min(data['mentions'] / 3, 1.0)  # Normalize mentions
-            detail_score = len(set(data['details'])) / 3  # Normalize unique details
-            intensity_score = len(data['intensity_scores']) > 0
-
-            # Calculate weighted confidence score
-            confidence_score = (
-                consistency_score * self.symptom_patterns['consistency'] +
-                detail_score * self.symptom_patterns['detail_level'] +
-                intensity_score * self.symptom_patterns['intensity']
-            ) * 100
-
-            # Calculate average intensity if available
-            intensity = (
-                sum(data['intensity_scores']) / len(data['intensity_scores'])
-                if data['intensity_scores']
-                else 5  # Default middle intensity
-            )
-
-            analyzed_symptoms.append({
-                'name': symptom_name.title(),
-                'intensity': round(intensity, 1),
-                'confidence_score': round(confidence_score, 1),
-                'mentions': data['mentions'],
-                'details': list(set(data['details']))
-            })
-
-        return analyzed_symptoms

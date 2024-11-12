@@ -28,7 +28,7 @@ class GeminiConfig:
                     'temperature': 0.3,  # Lower temperature for more focused medical responses
                     'top_p': 0.8,
                     'top_k': 40,
-                    'max_output_tokens': 1024,
+                    'max_output_tokens': 256,
                 }
             )
             logger.info("Gemini model initialized successfully")

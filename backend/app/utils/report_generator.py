@@ -27,34 +27,30 @@ def create_radar_chart(symptoms):
         if not symptoms:
             return None
 
-        plt.close('all')  # Close any existing plots
+        plt.close('all')
         fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(projection='polar'))
 
-        # Extract data
         names = [s['name'] for s in symptoms]
-        values = [float(s['intensity']) for s in symptoms]
+        # Handle both severity and intensity fields
+        values = [float(s.get('severity', s.get('intensity', 0))) for s in symptoms]
         
-        # Generate angles for the plot
         angles = np.linspace(0, 2*np.pi, len(names), endpoint=False)
-        
-        # Close the plot by appending first value to end
         values = np.concatenate((values, [values[0]]))
         angles = np.concatenate((angles, [angles[0]]))
         
-        # Create plot
         ax.plot(angles, values)
         ax.fill(angles, values, alpha=0.25)
-        ax.set_xticks(angles[:-1])  # Don't show the duplicated last angle
+        ax.set_xticks(angles[:-1])
         ax.set_xticklabels(names)
         ax.set_title("Symptoms Intensity")
 
-        # Save to buffer
         img_buffer = BytesIO()
         plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
         img_buffer.seek(0)
         plt.close('all')
         
         return img_buffer
+
     except Exception as e:
         logger.error(f"Error creating radar chart: {str(e)}")
         return None

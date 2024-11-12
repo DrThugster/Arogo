@@ -29,34 +29,33 @@ class MedicalChatbot:
         """
 
     async def process_message(self, message: str, user_details: Dict) -> str:
-        """
-        Process user message and generate response using Gemini API.
-        """
-        # Add user message to context
-        self.context.append({"role": "user", "content": message})
+                self.context.append({"role": "user", "content": message})
+                context_text = self._prepare_context(user_details)
+                
+                prompt = f"""
+                You are a medical assistant having a focused conversation. 
+                
+                Key rules:
+                1. Ask only ONE question at a time
+                2. Wait for the patient's response before proceeding
+                3. Keep responses concise and focused
+                4. If multiple questions are needed, ask the most important one first
+                
+                Previous context:
+                {context_text}
+                
+                Current message: {message}
+                
+                Provide a single, focused response or question.
+                """
+                
+                response = model.generate_content(prompt)
+                formatted_response = self._format_response(response.text)
+                self.context.append({"role": "assistant", "content": formatted_response})
+                
+                return formatted_response
 
-        # Prepare context for Gemini
-        context_text = self._prepare_context(user_details)
 
-        try:
-            # Generate response using Gemini
-            response = model.generate_content([
-                context_text,
-                "\n\nCurrent user message: " + message,
-                "\n\nProvide a helpful, relevant response:"
-            ])
-
-            # Process and format the response
-            formatted_response = self._format_response(response.text)
-            
-            # Add response to context
-            self.context.append({"role": "assistant", "content": formatted_response})
-
-            return formatted_response
-
-        except Exception as e:
-            print(f"Error generating response: {str(e)}")
-            return "I apologize, but I'm having trouble processing your request. Please try again or rephrase your question."
 
     def _prepare_context(self, user_details: Dict) -> str:
         """

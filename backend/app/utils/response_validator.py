@@ -51,13 +51,18 @@ class AIResponseValidator:
         # Check for emergency keywords
         has_emergency = any(re.search(self.required_patterns['emergency_keywords'], response, re.IGNORECASE))
 
+        # Extract severity/intensity information
+        severity_matches = re.findall(r'(\d+)/10', response)
+        severity_scores = [int(score) for score in severity_matches] if severity_matches else []
+
         # Structure the response
         return {
             'main_response': re.sub(r'\[.*?\]', '', response).strip(),
             'confidence_scores': confidence_scores,
             'recommendations': [rec.strip() for rec in recommendations],
             'requires_emergency': has_emergency,
-            'average_confidence': sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
+            'average_confidence': sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0,
+            'severity_scores': severity_scores
         }
 
     def enhance_response(self, response: Dict) -> str:
