@@ -3,62 +3,85 @@ from typing import Dict, List
 import logging
 from app.utils.ai_config import GeminiConfig
 import json
+import re
+from transformers import pipeline
 
 logger = logging.getLogger(__name__)
+
+
+from transformers import pipeline
+from typing import Dict, List
+import logging
 
 class SymptomAnalyzer:
     def __init__(self):
         self.ai_config = GeminiConfig()
-
+        # Using a verified medical NER model
+        self.ner_pipeline = pipeline("ner", model="samrawal/bert-base-uncased_clinical-ner")
+        
     async def analyze_conversation(self, chat_history: List[Dict]) -> Dict:
-        """Analyze entire conversation for symptoms using AI."""
         try:
-            # Create analysis prompt
+            # Extract conversation text
+            conversation_text = "\n".join([msg["content"] for msg in chat_history])
+            
+            # Use NER to identify medical entities
+            medical_entities = self.ner_pipeline(conversation_text)
+            
+            # Structure prompt for Gemini
             analysis_prompt = f"""
-            Analyze this medical consultation conversation and extract detailed symptom information.
+            Analyze these medical symptoms and entities:
             
-            Conversation:
-            {self._format_chat_history(chat_history)}
-
-            Provide a structured analysis including:
-            1. Identified symptoms with:
-               - Severity (1-10)
-               - Duration
-               - Pattern (constant, intermittent, progressive)
-               - Related factors
-               - Impact on daily activities
-            2. Symptom progression over time
-            3. Risk assessment
-            4. Urgency level
+            Conversation: {conversation_text}
+            Identified Medical Entities: {medical_entities}
             
-            Format response as JSON with these exact keys:
+            Provide structured analysis with:
+            1. Each symptom's severity (1-10)
+            2. Duration
+            3. Pattern (constant/intermittent)
+            4. Related factors
+            
+            Format as JSON:
             {{
                 "symptoms": [
                     {{
                         "name": "symptom name",
-                        "severity": 1-10,
-                        "duration": "duration description",
-                        "pattern": "pattern description",
-                        "related_factors": ["factor1", "factor2"],
-                        "impact": "impact description"
+                        "severity": numeric_value,
+                        "duration": "duration",
+                        "pattern": "pattern"
                     }}
                 ],
-                "progression": "progression description",
                 "risk_level": "low|medium|high",
-                "urgency": "routine|prompt|immediate",
-                "confidence_score": 1-100
+                "urgency": "routine|prompt|immediate"
             }}
             """
-
+            
             # Get AI analysis
             response = self.ai_config.model.generate_content(analysis_prompt)
-            analysis = self._parse_ai_response(response.text)
+            return self._parse_ai_response(response.text)
             
-            return analysis
-
         except Exception as e:
-            logger.error(f"Error analyzing conversation: {str(e)}")
-            raise
+            logger.error(f"Error analyzing symptoms: {str(e)}")
+            return {
+                "symptoms": [],
+                "risk_level": "unknown",
+                "urgency": "unknown"
+            }
+
+
+    def _extract_symptoms(self, text: str) -> List[Dict]:
+        symptoms = []
+        for match in re.finditer(self.symptom_patterns['pain'], text, re.IGNORECASE):
+            severity = re.search(self.symptom_patterns['severity'], text[match.start():match.start()+50])
+            duration = re.search(self.symptom_patterns['duration'], text[match.start():match.start()+50])
+            frequency = re.search(self.symptom_patterns['frequency'], text[match.start():match.start()+50])
+            
+            symptoms.append({
+                "name": match.group(),
+                "severity": int(severity.group(1)) if severity else 5,
+                "duration": duration.group() if duration else "Not specified",
+                "pattern": frequency.group() if frequency else "Not specified"
+            })
+        return symptoms
 
     async def validate_medical_response(self, response: str, context: List[Dict]) -> Dict:
         """Validate medical response using AI."""
@@ -164,72 +187,28 @@ class SymptomAnalyzer:
         response = self.ai_config.model.generate_content(severity_prompt)
         return self._parse_ai_response(response.text)
     
-    # def analyze_symptoms(self, chat_history: List[Dict]) -> List[Dict]:
-    #     """Analyze symptoms from chat history."""
-    #     try:
-    #         symptoms = []
-    #         for message in chat_history:
-    #             if message.get('symptom_analysis'):
-    #                 symptoms.extend(message['symptom_analysis'].get('symptoms', []))
-            
-    #         # Consolidate duplicate symptoms and average their intensities
-    #         consolidated_symptoms = {}
-    #         for symptom in symptoms:
-    #             name = symptom['name'].lower()
-    #             if name in consolidated_symptoms:
-    #                 consolidated_symptoms[name]['intensity'] = (
-    #                     consolidated_symptoms[name]['intensity'] + float(symptom['severity'])
-    #                 ) / 2
-    #             else:
-    #                 consolidated_symptoms[name] = {
-    #                     'name': symptom['name'],
-    #                     'intensity': float(symptom['severity']),
-    #                     'duration': symptom.get('duration', 'Not specified'),
-    #                     'pattern': symptom.get('pattern', 'Not specified')
-    #                 }
-            
-    #         return list(consolidated_symptoms.values())
-    #     except Exception as e:
-    #         logger.error(f"Error analyzing symptoms: {str(e)}")
-    #         return []
-        
-    # def calculate_severity_score(self, symptoms: List[Dict]) -> float:
-    #     """Calculate overall severity score from symptoms."""
-    #     try:
-    #         if not symptoms:
-    #             return 0.0
-                
-    #         total_severity = 0.0
-    #         for symptom in symptoms:
-    #             severity = symptom.get('severity') or symptom.get('intensity', 0)
-    #             if severity:
-    #                 total_severity += float(severity)
-            
-    #         # Normalize to 1-10 scale
-    #         return min(10.0, (total_severity / len(symptoms)))
-            
-    #     except Exception as e:
-    #         logger.error(f"Error calculating severity score: {str(e)}")
-    #         return 0.0
-
     def analyze_symptoms(self, chat_history: List[Dict]) -> List[Dict]:
         try:
-            symptoms = []
-            for message in chat_history:
-                if message.get('symptom_analysis'):
-                    for symptom in message['symptom_analysis'].get('symptoms', []):
-                        if isinstance(symptom, dict):
-                            symptoms.append({
-                                'name': symptom.get('name', 'Unknown'),
-                                'severity': float(symptom.get('severity', 0) or 0),
-                                'duration': symptom.get('duration', 'Not specified'),
-                                'pattern': symptom.get('pattern', 'Not specified')
-                            })
-            
-            return symptoms
+                symptoms = []
+                for message in chat_history:
+                    # Add direct symptom extraction from message content
+                    content = message.get('content', '')
+                    if content:
+                        # Extract symptoms using NER pipeline
+                        entities = self.ner_pipeline(content)
+                        for entity in entities:
+                            if entity['entity'].startswith('B-PROBLEM'):
+                                symptoms.append({
+                                    'name': entity['word'],
+                                    'severity': 5,  # Default severity
+                                    'duration': 'Not specified',
+                                    'pattern': 'Not specified'
+                                })
+                return symptoms
         except Exception as e:
             logger.error(f"Error analyzing symptoms: {str(e)}")
             return []
+
 
     def calculate_severity_score(self, symptoms: List[Dict]) -> float:
         try:
@@ -275,11 +254,42 @@ class SymptomAnalyzer:
         # Default to general practitioner
         return "General Practitioner"
     
-    def needs_conclusion(self, symptoms: List[Dict]) -> bool:
-        """Determine if enough symptom data is gathered for conclusion"""
-        if len(symptoms) >= 3:  # At least 3 symptoms documented
-            severity_score = self.calculate_severity_score(symptoms)
-            return severity_score > 0  # We have meaningful severity data
-        return False
-
-
+    def needs_conclusion(self, context: list) -> bool:
+        symptoms = self.analyze_symptoms(context)
+        severity_score = self.calculate_severity_score(symptoms)
+        
+        return any([
+            len(symptoms) >= 3,  # Enough symptoms gathered
+            severity_score >= 7,  # High severity detected
+            len(context) >= 10,  # Conversation length threshold
+            any(self._contains_emergency_indicators(symptom['name']) for symptom in symptoms)
+        ])
+    
+    async def get_treatment_recommendations(self, symptoms: List[Dict]) -> Dict:
+        """Generate treatment recommendations based on symptoms."""
+        prompt = f"""
+        Based on these symptoms: {json.dumps(symptoms)}
+        Provide treatment recommendations in this exact format:
+        {{
+            "medications": ["med1", "med2"],
+            "homeRemedies": ["remedy1", "remedy2"]
+        }}
+        Include 2-3 specific items in each category.
+        """
+        
+        response = self.ai_config.model.generate_content(prompt)
+        response_text = response.text.strip()
+        
+        # Extract JSON if embedded in other text
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        
+        if start_idx >= 0 and end_idx > start_idx:
+            json_str = response_text[start_idx:end_idx + 1]
+            return json.loads(json_str)
+        
+        # Return default structure if parsing fails
+        return {
+            "medications": ["Consult doctor for appropriate medication"],
+            "homeRemedies": ["Rest and hydration recommended"]
+        }

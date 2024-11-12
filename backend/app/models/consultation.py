@@ -25,3 +25,4 @@ class ConsultationCreate(BaseModel):
                 "mobile": "1234567890"
             }
         }
+

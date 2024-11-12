@@ -6,142 +6,17 @@ from app.config.database import consultations_collection
 from app.utils.report_generator import create_pdf_report
 from app.utils.symptom_analyzer import SymptomAnalyzer
 from app.utils.speech_processor import process_speech_to_text
+from app.services.chat_service import ChatService
 from datetime import datetime
-import google.generativeai as genai
-from app.config.database import redis_client
 import json
 import uuid
 import io
 import json
 import os
 import logging
-from app.utils.consultation_helpers import (
-    generate_medication_recommendations,
-    generate_home_remedies,
-    generate_precautions,
-    generate_diagnosis_description
-)
-
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-class ChatService:
-    def __init__(self):
-        # Initialize Gemini
-        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-pro')
-        self.collection = consultations_collection
-        
-    def get_conversation_context(self, consultation_id: str) -> str:
-        """Get conversation history from Redis."""
-        try:
-            context = redis_client.get(f"chat_context_{consultation_id}")
-            return json.loads(context) if context else []
-        except:
-            return []
-
-    def store_conversation_context(self, consultation_id: str, context: list):
-        """Store conversation history in Redis."""
-        try:
-             # Create a serializable copy of the context
-            serializable_context = []
-            for message in context:
-             message_copy = {
-                "type": message["type"],
-                "content": message["content"],
-                "timestamp": message["timestamp"].isoformat() if isinstance(message["timestamp"], datetime) else message["timestamp"]
-            }
-            serializable_context.append(message_copy)
-
-
-            redis_client.set(
-                f"chat_context_{consultation_id}",
-                json.dumps(serializable_context),
-                ex=3600  # expire after 1 hour
-            )
-        except Exception as e:
-            logger.error(f"Error storing context: {str(e)}")
-
-    def create_prompt(self, message: str, context: list) -> str:
-        """Create a context-aware prompt for Gemini."""
-        base_prompt = """
-        You are a medical pre-diagnosis assistant. Your role is to:
-        1. Ask relevant follow-up questions about symptoms
-        2. Show empathy while gathering information
-        3. Provide preliminary guidance
-        4. Recommend when to seek professional medical help
-        5. Keep responses clear and focused
-
-        Rules:
-        - Ask one main question at a time
-        - Don't make definitive diagnoses
-        - If symptoms are severe, recommend immediate medical attention
-        - Be professional and empathetic
-        - Provide medical information based on symptoms
-        """
-
-        # Add conversation history
-        history = "\n".join([
-            f"{'Patient' if msg['type'] == 'user' else 'Assistant'}: {msg['content']}"
-            for msg in context[-5:]  # Last 5 messages for context
-        ])
-
-        return f"{base_prompt}\n\nConversation History:\n{history}\n\nCurrent Patient Message: {message}\n\nResponse:"
-
-    async def update_chat_history(self, consultation_id: str, message: dict):
-        """Update chat history in MongoDB and context in Redis."""
-        try:
-            # Update MongoDB
-            result = consultations_collection.update_one(
-                {"consultation_id": consultation_id},
-                {
-                    "$push": {
-                        "chat_history": message
-                    },
-                    "$set": {
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-
-            # Update Redis context
-            context = self.get_conversation_context(consultation_id)
-            context.append(message)
-            self.store_conversation_context(consultation_id, context)
-            
-            return result.modified_count > 0
-        except Exception as e:
-            logger.error(f"Error updating chat history: {str(e)}")
-            return False
-
-    async def get_ai_response(self, consultation_id: str, message: str) -> str:
-        """Generate AI response using Gemini."""
-        try:
-            # Get conversation context
-            context = self.get_conversation_context(consultation_id)
-            
-            # Create prompt with context
-            prompt = self.create_prompt(message, context)
-            
-            # Generate response from Gemini
-            response = self.model.generate_content(prompt)
-            
-            # Process and clean response
-            ai_response = response.text.strip()
-            
-            # Add some safety checks
-            if not ai_response:
-                return "I apologize, but I need more information about your symptoms. Could you please provide more details?"
-            
-            if len(ai_response) > 1000:  # Limit response length
-                ai_response = ai_response[:1000] + "..."
-            
-            return ai_response
-
-        except Exception as e:
-            logger.error(f"Error generating AI response: {str(e)}")
-            return "I apologize, but I'm having trouble processing your request. Could you please rephrase your message?"
 
 # Create an instance of ChatService
 chat_service = ChatService()
@@ -305,39 +180,47 @@ async def get_consultation_summary(consultation_id: str):
             # Get chat history for diagnosis
             chat_history = consultation.get('chat_history', [])
             
-            # Generate diagnosis description using consultation helper
-            diagnosis_description = generate_diagnosis_description(chat_history)
-            
-            # Analyze symptoms using SymptomAnalyzer for detailed analysis
+            # Initialize symptom analyzer
             symptom_analyzer = SymptomAnalyzer()
-            analyzed_symptoms = symptom_analyzer.analyze_symptoms(chat_history)
             
-            # Generate recommendations using consultation helpers
-            medications = generate_medication_recommendations(analyzed_symptoms)
-            home_remedies = generate_home_remedies(analyzed_symptoms)
-            precautions = generate_precautions(analyzed_symptoms)
+            # Analyze symptoms and get detailed analysis
+            analyzed_symptoms = await symptom_analyzer.analyze_conversation(chat_history)
+            severity_assessment = await symptom_analyzer.get_severity_assessment(analyzed_symptoms.get('symptoms', []))
+            
+            # Validate the medical analysis
+            validation_result = await symptom_analyzer.validate_medical_response(
+                str(analyzed_symptoms),
+                chat_history
+            )
             
             # Generate summary
+            # Get treatment recommendations
+            treatment_recommendations = await symptom_analyzer.get_treatment_recommendations(analyzed_symptoms.get('symptoms', []))
+            
             summary = {
                 "consultation_id": consultation_id,
                 "userDetails": consultation["user_details"],
                 "diagnosis": {
-                    "symptoms": analyzed_symptoms,
-                    "description": diagnosis_description,
-                    "severityScore": symptom_analyzer.calculate_severity_score(analyzed_symptoms),
-                    "riskLevel": symptom_analyzer.determine_risk_level(analyzed_symptoms),
-                    "timeframe": symptom_analyzer.recommend_timeframe(analyzed_symptoms),
-                    "recommendedDoctor": symptom_analyzer.recommend_specialist(analyzed_symptoms)
+                    "symptoms": analyzed_symptoms.get('symptoms', []),
+                    "description": analyzed_symptoms.get('progression', ''),
+                    "severityScore": severity_assessment.get('overall_severity', 0),
+                    "riskLevel": severity_assessment.get('risk_level', 'unknown'),
+                    "timeframe": severity_assessment.get('recommended_timeframe', ''),
+                    "recommendedDoctor": symptom_analyzer.recommend_specialist(analyzed_symptoms.get('symptoms', []))
                 },
                 "recommendations": {
-                    "medications": medications,
-                    "homeRemedies": home_remedies
+                    "medications": treatment_recommendations.get("medications", []),
+                    "homeRemedies": treatment_recommendations.get("homeRemedies", []),
+                    "urgency": analyzed_symptoms.get('urgency', 'unknown'),
+                    "safety_concerns": validation_result.get('safety_concerns', []),
+                    "suggested_improvements": validation_result.get('suggested_improvements', [])
                 },
-                "precautions": precautions,
+                "precautions": analyzed_symptoms.get('precautions', []),
                 "chatHistory": chat_history,
                 "created_at": consultation["created_at"],
                 "completed_at": datetime.utcnow()
             }
+
             
             # Update consultation with summary
             result = consultations_collection.update_one(
@@ -366,7 +249,7 @@ async def get_consultation_summary(consultation_id: str):
     except Exception as e:
         logger.error(f"Error generating consultation summary: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 @router.get("/report/{consultation_id}")
 async def get_consultation_report(consultation_id: str):

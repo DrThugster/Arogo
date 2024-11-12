@@ -1,6 +1,6 @@
 
 # backend/app/utils/response_validator.py
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import re
 
 class AIResponseValidator:
@@ -12,32 +12,29 @@ class AIResponseValidator:
             'emergency_keywords': r'emergency|immediate|urgent|serious|severe',
         }
 
-    def validate_response(self, response: str) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Validate AI response for required elements and proper formatting.
-        Returns: (is_valid, error_message, processed_response)
-        """
-        try:
-            # Check for minimum length
-            if len(response) < 50:
-                return False, "Response too short", {}
+    def validate_symptoms(self, symptoms: List[Dict]) -> Tuple[bool, List[Dict]]:
+        """Validate and clean symptom data"""
+        validated_symptoms = []
+        
+        for symptom in symptoms:
+            try:
+                # Ensure required fields with proper types
+                validated_symptom = {
+                    "name": str(symptom.get('name', '')),
+                    "severity": float(symptom.get('severity', 0)),
+                    "duration": str(symptom.get('duration', 'Not specified')),
+                    "pattern": str(symptom.get('pattern', 'Not specified'))
+                }
+                
+                if validated_symptom["name"] and validated_symptom["severity"] > 0:
+                    validated_symptoms.append(validated_symptom)
+                    
+            except (ValueError, TypeError):
+                continue
+                
+        return len(validated_symptoms) > 0, validated_symptoms
 
-            # Check for required patterns
-            missing_patterns = []
-            for pattern_name, pattern in self.required_patterns.items():
-                if not re.search(pattern, response, re.IGNORECASE):
-                    missing_patterns.append(pattern_name)
 
-            if missing_patterns:
-                return False, f"Missing required elements: {', '.join(missing_patterns)}", {}
-
-            # Process and structure the response
-            processed = self._process_response(response)
-            
-            return True, None, processed
-
-        except Exception as e:
-            return False, f"Validation error: {str(e)}", {}
 
     def _process_response(self, response: str) -> Dict:
         """Process and structure the AI response."""

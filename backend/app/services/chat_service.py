@@ -35,7 +35,6 @@ class ChatService:
             logger.error(f"Error storing context: {e}")
 
     async def process_message(self, consultation_id: str, message: str) -> dict:
-        """Process message with AI and symptom analysis."""
         try:
             # Get current context
             context = await self.get_conversation_context(consultation_id)
@@ -58,17 +57,21 @@ class ChatService:
             # Analyze symptoms from conversation
             symptom_analysis = await self.symptom_analyzer.analyze_conversation(context)
             
+            # Get treatment recommendations
+            treatment_recommendations = await self.symptom_analyzer.get_treatment_recommendations(symptom_analysis.get("symptoms", []))
+            
             # Validate response
             validation_result = await self.symptom_analyzer.validate_medical_response(
                 response,
                 context
             )
 
-            # Process final response
+            # Process final response with treatment recommendations
             processed_response = await self._process_response(
                 response,
                 symptom_analysis,
-                validation_result
+                validation_result,
+                treatment_recommendations
             )
 
             # Add bot message to context
@@ -94,12 +97,18 @@ class ChatService:
             raise
 
 
+
     async def _generate_ai_response(self, message: str, context: list, user_details: dict) -> str:
         """Generate AI response using Gemini."""
         question_count = sum(1 for msg in context if msg['type'] == 'bot' and '?' in msg['content'])
-
+        symptoms = self.symptom_analyzer.analyze_symptoms(context)
+        severity_score = self.symptom_analyzer.calculate_severity_score(symptoms)
+        
         prompt = f"""
-        As a medical AI assistant, respond to this patient considering their full context.
+        You are a medical AI assistant. Your task is to either:
+        1. Ask exactly ONE specific question about symptoms
+        OR
+        2. Provide a final assessment if criteria are met
 
         Patient Details:
         Age: {user_details.get('age')}
@@ -110,25 +119,32 @@ class ChatService:
 
         Current Message: {message}
         Questions Asked: {question_count}/5
+        Symptoms Identified: {json.dumps(symptoms)}
+        Current Severity: {severity_score}
 
-        IMPORTANT RULES:
-        1. If {question_count} >= 4, provide a conclusion with likely condition and next steps 
-        2. Ask only ONE specific question about the symptom
-        3. Focus on the most important aspect first
-        4. Each response should be focused and under 50 words
-        5. Do not provide treatment advice until symptoms are fully understood
-        6. Wait for patient's response before asking follow-up questions
-        7. Maximum 5 questions total
+        STRICT RESPONSE FORMAT:
+        {"[ASSESSMENT]\nSymptom Summary:\nLikely Condition:\nNext Steps:\nUrgency Level:" if question_count >= 4 or severity_score >= 7 
+        else "[QUESTION]\nAsk exactly ONE specific question about: (most concerning symptom or important missing information)"}
 
-        Respond with a single, focused question or statement.
-        {f"Provide final assessment and recommendations" if question_count >= 4 else "Ask next most relevant question"}
+        RULES:
+        - ONE question only, no follow-ups in same response
+        - Question must be specific and focused
+        - Response under 50 words
+        - No treatment advice during questioning
+        - Maximum 6 questions total
+
+        {f"Provide final assessment now." if question_count >= 4 or severity_score >= 7 
+        else "Provide single most important question."}
         """
 
         response = self.ai_config.model.generate_content(prompt)
-        return response.text
+        cleaned_response = response.text.replace('[QUESTION]', '').replace('[ASSESSMENT]', '').strip()
+        return cleaned_response
 
 
-    async def _process_response(self, response: str, symptom_analysis: dict, validation: dict) -> dict:
+
+
+    async def _process_response(self, response: str, symptom_analysis: dict, validation: dict, treatment_recommendations: dict) -> dict:
         """Process and enhance the AI response."""
         processed = {
             "response": response,
@@ -136,6 +152,13 @@ class ChatService:
             "risk_level": symptom_analysis.get("risk_level", "unknown"),
             "urgency": symptom_analysis.get("urgency", "unknown"),
             "requires_emergency": validation.get("emergency_level") == "high",
+            "recommendations": {
+                    "medications": treatment_recommendations.get("medications", []),
+                    "homeRemedies": treatment_recommendations.get("homeRemedies", []),
+                    "urgency": symptom_analysis.get("urgency", "unknown"),
+                    "safety_concerns": validation.get("safety_concerns", []),
+                    "suggested_improvements": validation.get("suggested_improvements", [])
+            },
             "timestamp": datetime.utcnow().isoformat()
         }
 
