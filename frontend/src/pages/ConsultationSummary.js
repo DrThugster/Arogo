@@ -108,7 +108,7 @@ const ConsultationSummary = () => {
         // Transform symptoms data for radar chart if needed
         const transformedSymptoms = data.diagnosis?.symptoms?.map(symptom => ({
           ...symptom,
-          intensity: symptom.severity || symptom.intensity || 0
+          intensity: parseInt(symptom.severity || symptom.intensity || 0, 10)
         })) || [];
 
         setSummary(prevSummary => ({
@@ -296,14 +296,17 @@ const ConsultationSummary = () => {
               <Box sx={{ height: 300, width: '100%' }}>
                 <ResponsiveContainer>
                   <RadarChart data={summary.diagnosis.symptoms}>
-                    <PolarGrid />
+                    <PolarGrid gridType="circle" />
                     <PolarAngleAxis dataKey="name" />
-                    <PolarRadiusAxis domain={[0, 10]} />
+                    <PolarRadiusAxis domain={[0, 10]}  tickCount={6}/>
                     <Radar
                       name="Intensity"
                       dataKey="intensity"
                       fill={theme.palette.primary.main}
                       fillOpacity={0.6}
+                      stroke={theme.palette.primary.main}
+                      strokeWidth={2}
+
                     />
                   </RadarChart>
                 </ResponsiveContainer>

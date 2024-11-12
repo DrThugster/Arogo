@@ -251,8 +251,43 @@ class SymptomAnalyzer:
 
     def recommend_specialist(self, symptoms: List[Dict]) -> str:
         """Recommend appropriate medical specialist based on symptoms."""
-        # Default to general practitioner
-        return "General Practitioner"
+        try:
+            specialist_prompt = f"""
+            Based on these symptoms: {json.dumps(symptoms)}
+            
+            Determine the most appropriate medical specialist considering:
+            1. Primary affected body system
+            2. Symptom complexity
+            3. Specific medical expertise required
+            
+            Choose ONE specialist from:
+            - Cardiologist
+            - Dermatologist
+            - Gastroenterologist
+            - Neurologist
+            - Orthopedist
+            - Pulmonologist
+            - ENT Specialist
+            - Endocrinologist
+            - Rheumatologist
+            - General Practitioner
+            
+            Format response as JSON:
+            {{
+                "recommended_specialist": "specialist name",
+                "reasoning": ["reason1", "reason2"]
+            }}
+            """
+            
+            response = self.ai_config.model.generate_content(specialist_prompt)
+            result = self._parse_ai_response(response.text)
+            
+            return result.get("recommended_specialist", "General Practitioner")
+            
+        except Exception as e:
+            logger.error(f"Error determining specialist: {str(e)}")
+            return "General Practitioner"
+
     
     def needs_conclusion(self, context: list) -> bool:
         symptoms = self.analyze_symptoms(context)
